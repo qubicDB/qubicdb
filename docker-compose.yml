@@ -1,0 +1,42 @@
+services:
+  qubicdb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: qubicdb
+    ports:
+      - "6060:6060"  # HTTP API
+    volumes:
+      - qubicdb_data:/app/data
+    environment:
+      - QUBICDB_HTTP_ADDR=:6060
+      - QUBICDB_DATA_PATH=/app/data
+      - QUBICDB_ADMIN_ENABLED=true
+      - QUBICDB_ADMIN_USER=admin
+      - QUBICDB_ADMIN_PASSWORD=qubicdb       # ⚠ CHANGE for production
+      - QUBICDB_ALLOWED_ORIGINS=http://localhost:6060
+      - QUBICDB_REGISTRY_ENABLED=false
+      - QUBICDB_MCP_ENABLED=true
+      - QUBICDB_MCP_PATH=/mcp
+      - QUBICDB_MCP_STATELESS=true
+      - QUBICDB_MCP_RATE_LIMIT_RPS=30
+      - QUBICDB_MCP_RATE_LIMIT_BURST=60
+      - QUBICDB_MCP_ENABLE_PROMPTS=true
+      - QUBICDB_MCP_API_KEY=change-me-mcp-key # ⚠ CHANGE for production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6060/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 256M
+
+volumes:
+  qubicdb_data:
+    driver: local

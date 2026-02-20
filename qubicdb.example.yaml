@@ -1,0 +1,118 @@
+# ─────────────────────────────────────────────────────────────
+# QubicDB Configuration File
+# ─────────────────────────────────────────────────────────────
+#
+# Copy this file to qubicdb.yaml and adjust values as needed.
+# Set QUBICDB_CONFIG=/path/to/qubicdb.yaml to load at startup.
+#
+# Configuration hierarchy (highest priority wins):
+#   1. CLI flags              (--http-addr, --admin-password, …)
+#   2. YAML configuration     (this file)
+#   3. Environment variables  (QUBICDB_* prefix)
+#   4. Built-in defaults
+#
+# Duration values accept Go duration strings: "30s", "5m", "1h30m", etc.
+# ─────────────────────────────────────────────────────────────
+
+# ── Server ──────────────────────────────────────────────────
+# Network listener settings.
+# Bind to 127.0.0.1 for local-only access, 0.0.0.0 for all interfaces.
+# Default ":6060" binds to 0.0.0.0:6060.
+server:
+  httpAddr: ":6060"      # TCP address for the HTTP/REST API
+
+# ── Storage ─────────────────────────────────────────────────
+# Persistence layer for .nrdb brain files.
+storage:
+  dataPath: "./data"     # Directory for .nrdb brain persistence files
+  compress: true         # Enable msgpack-level compression
+  walEnabled: true       # Enable write-ahead logging for crash recovery
+  fsyncPolicy: "interval" # Fsync mode: always | interval | off
+  fsyncInterval: "1s"   # Fsync cadence when fsyncPolicy=interval
+  checksumValidationInterval: "0s" # Periodic checksum scan interval (0s disables)
+  startupRepair: true    # Repair corrupt/missing persisted entries during startup
+
+# ── Matrix ──────────────────────────────────────────────────
+# Organic memory matrix bounds per brain instance.
+# ⚠ maxNeurons > 10,000,000 will consume significant memory.
+# ⚠ maxDimension > 10,000 may degrade spatial operations.
+# Proceed only if you know what you are doing.
+matrix:
+  minDimension: 3        # Initial dimensionality for new brain matrices
+  maxDimension: 1000     # Upper dimension growth limit
+  maxNeurons: 1000000    # Hard cap on neurons per brain instance
+
+# ── Lifecycle ───────────────────────────────────────────────
+# Brain state transition thresholds.
+# Must satisfy: idleThreshold < sleepThreshold < dormantThreshold.
+lifecycle:
+  idleThreshold: "30s"       # Active → Idle transition delay
+  sleepThreshold: "5m"       # Idle → Sleeping transition delay
+  dormantThreshold: "30m"    # Sleeping → Dormant transition delay
+
+# ── Daemons ─────────────────────────────────────────────────
+# Background daemon cycle intervals.
+# ⚠ Intervals below 5s are very aggressive and will increase CPU/IO load.
+# Proceed only if you know what you are doing.
+daemons:
+  decayInterval: "1m"            # Energy decay daemon cycle
+  consolidateInterval: "5m"      # Memory consolidation daemon cycle
+  pruneInterval: "10m"           # Dead neuron/synapse pruning cycle
+  persistInterval: "1m"          # In-memory → disk flush cycle
+  reorgInterval: "15m"           # Spatial reorganisation cycle
+
+# ── Worker ──────────────────────────────────────────────────
+# Worker pool settings for per-index brain goroutines.
+worker:
+  maxIdleTime: "30m"     # Idle brain eviction threshold
+
+# ── Registry ────────────────────────────────────────────────
+# UUID registry guard. When enabled, only pre-registered UUIDs
+# may access brain operations. Clients must create their UUID
+# via /v1/registry before calling other endpoints.
+registry:
+  enabled: false         # Set to true to enforce UUID pre-registration
+
+# ── Vector ──────────────────────────────────────────────────
+# Embedding layer for hybrid semantic + lexical search.
+# Requires libllama_go shared library in system paths.
+vector:
+  enabled: true                               # Enable vector embedding layer
+  modelPath: "./dist/MiniLM-L6-v2.Q8_0.gguf" # Path to GGUF BERT embedding model
+  gpuLayers: 0                                # GPU layers to offload (0 = CPU only)
+  alpha: 0.6                                  # Vector score weight in hybrid search
+                                              #   0.0 = pure lexical, 1.0 = pure semantic
+
+# ── Admin ───────────────────────────────────────────────────
+# Server administration endpoints (/admin/*).
+# All admin endpoints (except /admin/login) require HTTP Basic Auth.
+# ⚠ Change the default password before deploying to production!
+admin:
+  enabled: true          # Set to false to disable all admin endpoints
+  user: "admin"          # Admin username
+  password: "qubicdb"    # Admin password — CHANGE THIS
+
+# ── MCP ─────────────────────────────────────────────────────
+# Client-facing Model Context Protocol endpoint.
+# Exposes streamable HTTP tools for LLM integrations.
+mcp:
+  enabled: false                       # Enable /mcp endpoint
+  path: "/mcp"                         # MCP route path
+  apiKey: ""                           # Optional API key (X-API-Key or Bearer)
+  stateless: true                      # Stateless streamable-http sessions
+  rateLimitRPS: 30                     # Per-client requests/second (0 disables)
+  rateLimitBurst: 60                   # Burst capacity for MCP limiter
+  enablePrompts: true                  # Register built-in MCP prompts
+  # allowedTools: ["qubicdb_write", "qubicdb_read", "qubicdb_search", "qubicdb_recall", "qubicdb_context", "qubicdb_registry_find_or_create"]
+  # Optional allowlist (empty = all built-ins)
+
+# ── Security ────────────────────────────────────────────────
+# Network security, CORS, request limits, and TLS.
+security:
+  allowedOrigins: "http://localhost:6060" # CORS origins (avoid "*" when admin is enabled)
+  maxRequestBody: 1048576         # Max request body in bytes (1 MB, 0 = unlimited)
+  maxNeuronContentBytes: 65536    # Max neuron content payload in bytes (64 KB)
+  readTimeout: "30s"              # HTTP read timeout
+  writeTimeout: "30s"             # HTTP write timeout
+  # tlsCert: "/path/to/cert.pem" # Uncomment to enable HTTPS
+  # tlsKey: "/path/to/key.pem"   # Uncomment to enable HTTPS

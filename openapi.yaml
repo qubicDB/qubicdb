@@ -1,0 +1,1975 @@
+openapi: 3.0.3
+info:
+  title: QubicDB HTTP API
+  version: 1.0.0
+  description: |
+    Production-oriented OpenAPI contract for QubicDB's HTTP interface.
+
+    Full operations reference: [`docs/API.md`](./docs/API.md)
+
+    ---
+
+    ## Introduction
+
+    QubicDB is a **brain-like recursive memory database** for LLM applications, written in Go.
+    It is not a vector store wrapper, not a key-value cache, and not a document database.
+    It is a **per-index memory runtime** where each index owns:
+
+    - An isolated in-memory `Matrix` (N-dimensional neuron space)
+    - A dedicated serialized `BrainWorker` goroutine (no cross-index lock contention)
+    - A lifecycle state machine: Active → Idle → Sleeping → Dormant
+    - Background daemons: Decay, Consolidate, Prune, Persist, Reorg
+    - A hybrid lexical + vector search engine with brain-mechanics ranking
+
+    ---
+
+    ## What problem does it solve?
+
+    | Problem | QubicDB answer |
+    |---|---|
+    | Session cold start | Per-index persistent matrix, auto-loaded on access |
+    | Shallow retrieval | Energy/recency/access/depth multipliers on every score |
+    | Multi-tenant bleed | Per-index worker isolation, no shared state |
+    | Ops gap | Full admin API, lifecycle control, runtime config patch |
+    | Semantic gap | Hybrid α-blended lexical+vector scoring with graceful fallback |
+
+    ---
+
+    ## Architecture
+
+    ```
+    HTTP Client / SDK / MCP Client
+            │
+            ▼
+    pkg/api/server.go  (Rate Limiter, CORS, Admin Basic Auth)
+            │
+            ▼
+    WorkerPool → BrainWorker["index-A"] (goroutine + queue)
+            │
+            ▼
+    MatrixEngine (AddNeuron, Searcher, spreadActivation)
+            │
+            ├── pkg/core/types.go  (Matrix, Neuron, Synapse, BrainState)
+            ├── pkg/vector/vectorizer  (GGUF embedding, SIMD cosine)
+            └── pkg/persistence/store.go  (WAL + .nrdb + CRC32 + gzip)
+    ```
+
+    **Key design decisions:**
+    - One worker per index — all operations serialized through a single goroutine queue
+    - Organic matrix — dimension grows with neurons (bounded by `matrix.maxDimension`)
+    - Vectorizer is global — loaded once, passed through WorkerPool → BrainWorker → Searcher
+    - Registry is optional — `registry.enabled=false` (default) allows any UUID
+
+    ---
+
+    ## Data Model
+
+    **Neuron** — the fundamental memory unit:
+    - `id` (UUID), `content` (string), `content_hash` (SHA-1, deduplication key)
+    - `energy` [0.0–1.0] — born at 1.0, decays over time, boosted on search hit
+    - `depth` — 0=surface/hot, higher=consolidated/deep
+    - `last_fired_at`, `access_count` — drive recency and importance scoring
+    - `embedding` []float32 — 384-dim MiniLM vector, set once on write (nil if vector disabled)
+
+    **Synapse** — Hebbian connection between neurons:
+    - `weight` [0.0–1.0] — strengthens on co-activation, decays over time
+    - `bidirectional=true` — traversed both ways in spread activation
+
+    **Matrix** — per-index memory space:
+    - `neurons`, `synapses`, `adjacency` maps
+    - `current_dim` — grows organically, bounded by `matrix.maxDimension`
+    - `version` — monotonic counter used by persistence layer
+
+    ---
+
+    ## Lifecycle State Machine
+
+    ```
+    Active ──(idleThreshold=30s)──► Idle ──(sleepThreshold=5m)──► Sleeping ──(dormantThreshold=30m)──► Dormant
+      ▲                                                                                                    │
+      └──────────────────────────── wake() ◄──────────────────────────────────────────────────────────────┘
+    ```
+
+    Any incoming operation auto-wakes a sleeping/dormant index.
+    Workers idle beyond `worker.maxIdleTime` (default 30m) are evicted; matrix reloaded from disk on next access.
+    Lifecycle thresholds are runtime-patchable via `POST /v1/config`.
+
+    ---
+
+    ## Persistence — NRDB Format
+
+    Each index is stored as a single `.nrdb` binary file:
+    ```
+    Header: "NRDB" magic + version + flags + CRC32 checksum
+    Payload: msgpack(Matrix) [optionally gzip-compressed]
+    ```
+
+    - WAL (`storage.walEnabled=true`) — every write appended before flush
+    - fsync policy: `always | interval | off` (default: `interval` at 1s)
+    - Startup repair: WAL replay on crash recovery (`storage.startupRepair=true`)
+
+    ---
+
+    ## Hybrid Search Scoring
+
+    ```
+    stringScore  = exactPhraseMatch(+10) + wordOverlap(+5) + fuzzyLevenshtein(+2)
+    vectorScore  = max(CosineSimilarity(queryVec, neuron.Embedding), 0)  [SIMD-accelerated]
+
+    baseScore = α × vectorScore + (1-α) × (stringScore / (stringScore + 1))
+      where α = vector.alpha (default 0.6)
+      fallback: baseScore = stringScore  (when vector unavailable)
+
+    finalScore = baseScore
+      × (0.5 + energy × 0.5)              ← energy boost
+      × (0.8 + 0.2/(1 + ageHours/24))     ← recency boost
+      × (1 + 0.1 × log10(accessCount+1))  ← access importance
+      × (1/(1 + depth × 0.2))             ← depth penalty
+    ```
+
+    Spread activation traverses the synapse adjacency graph up to `depth` hops.
+    `vector.alpha` is patchable at runtime via `POST /v1/config`.
+
+    ---
+
+    ## What's new in current production surface
+
+    - **Hybrid search** — lexical + GGUF embedding vector scoring, α-weighted, SIMD cosine similarity
+    - **Runtime config patch** — `POST /v1/config` with explicit safe-field whitelist, partial apply
+    - **Registry guard** — `registry.enabled` for controlled index admission
+    - **Config-driven admin auth** — Basic Auth with SHA-256 constant-time comparison
+    - **Standardized error envelope** — machine-readable `code` field, stable across versions
+    - **MCP endpoint** — optional streamable HTTP MCP with per-tool allowlist and dedicated rate limiter
+    - **Connection strings** — `qubicdb://` and `qubicdb+tls://` for SDK/CLI interoperability
+    - **WAL + fsync policy** — `always | interval | off` with startup repair
+    - **Checksum validation** — CRC32 on every `.nrdb` file, optional background scan interval
+
+    ---
+
+    ## Scope
+
+    - This spec covers the REST API exposed by `pkg/api/server.go`.
+    - Index-scoped endpoints require **one** index selector:
+      - `X-Index-ID` header (preferred)
+      - `indexId` query parameter
+      - `index_id` query parameter
+    - Admin routes require HTTP Basic Auth when `admin.enabled=true`.
+
+    ## Important behavior
+
+    - Direct mutation routes (`/v1/touch`, `/v1/forget/{id}`, `/v1/fire/{id}`) are intentionally
+      disabled and return `MUTATION_DISABLED`. Memory mutation must remain organic/internal.
+    - `search` and `context` clamp depth/limits to server-side maxima (depth≤8, limit≤200, maxTokens≤16000).
+    - Runtime config patching (`POST /v1/config`) only allows a controlled subset of fields.
+    - Duplicate `content_hash` on write fires the existing neuron instead of inserting a duplicate.
+
+    ---
+
+    ## Benchmarks (Apple M3, arm64)
+
+    | Benchmark | ns/op | Notes |
+    |---|---:|---|
+    | MatrixEngineAddNeuron | 704,893 | Single neuron write |
+    | MatrixEngineSearch (1K neurons) | 2,277,576 | Lexical search |
+    | MatrixEngineParallelSearch | 414,734 | Concurrent read-lock |
+    | BrainWorkerAddNeuron | 1,394,905 | Through worker queue |
+    | BrainWorkerParallel (async) | **80** | Async submit overhead |
+
+    Full repro commands and capacity planning: [`docs/API.md`](./docs/API.md)
+
+externalDocs:
+  description: Detailed mechanics, config hierarchy, and operational docs
+  url: ./docs/API.md
+
+servers:
+  - url: http://localhost:6060
+    description: Local development
+  - url: https://localhost:6060
+    description: Local TLS (when `security.tlsCert`/`security.tlsKey` configured)
+
+tags:
+  - name: Health
+  - name: Memory
+  - name: Brain
+  - name: Registry
+  - name: Observability
+  - name: Command
+  - name: Admin
+  - name: Runtime Config
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health probe
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service health snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/write:
+    post:
+      tags: [Memory]
+      summary: Write a memory (create neuron)
+      description: Creates a neuron inside the selected index (brain instance).
+      operationId: writeMemory
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteRequest'
+      responses:
+        '200':
+          description: Memory written (or duplicate content neuron re-fired)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NeuronDocument'
+        '400':
+          description: Validation/index errors
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/read/{id}:
+    get:
+      tags: [Memory]
+      summary: Read one neuron by ID
+      operationId: readMemory
+      parameters:
+        - $ref: '#/components/parameters/NeuronIdPath'
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      responses:
+        '200':
+          description: Neuron document
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NeuronDocument'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/recall:
+    get:
+      tags: [Memory]
+      summary: Recall neurons (list memory)
+      description: Returns up to 100 neurons, sorted by energy descending.
+      operationId: recallMemory
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      responses:
+        '200':
+          description: Recall result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecallResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/search:
+    get:
+      tags: [Memory]
+      summary: Search neurons (GET)
+      description: |
+        Query-string variant of search.
+
+        Server clamps:
+        - `depth` to max 8
+        - `limit` to max 200
+      operationId: searchMemoryGet
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+        - in: query
+          name: q
+          required: true
+          schema:
+            type: string
+          description: Search query string.
+        - in: query
+          name: depth
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 2
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 20
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+    post:
+      tags: [Memory]
+      summary: Search neurons (POST)
+      description: |
+        JSON-body variant of search.
+
+        Search uses hybrid lexical/vector scoring when vector embeddings are enabled.
+      operationId: searchMemoryPost
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/context:
+    post:
+      tags: [Memory]
+      summary: Build token-aware LLM context
+      description: |
+        Runs search from cue, then assembles context text until token budget is reached.
+        Token count is estimated as `len(content)/4` per neuron.
+      operationId: buildContext
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextRequest'
+      responses:
+        '200':
+          description: Context assembly result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/command:
+    post:
+      tags: [Command]
+      summary: Execute MongoDB-like command
+      description: |
+        Runs protocol commands (`find`, `findOne`, `insert`, `count`, `search`, `stats`, ...).
+
+        Direct mutation command types (`update`, `updateOne`, `delete`, `deleteOne`, `activate`)
+        are intentionally blocked and return `MUTATION_DISABLED`.
+      operationId: executeCommand
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandRequest'
+      responses:
+        '200':
+          description: Command result envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/touch:
+    put:
+      tags: [Memory]
+      summary: Mutation disabled
+      operationId: mutationTouchPut
+      responses:
+        '400':
+          description: Direct mutation disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [Memory]
+      summary: Mutation disabled
+      operationId: mutationTouchPost
+      responses:
+        '400':
+          description: Direct mutation disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/forget/{id}:
+    delete:
+      tags: [Memory]
+      summary: Mutation disabled
+      operationId: mutationForget
+      parameters:
+        - $ref: '#/components/parameters/NeuronIdPath'
+      responses:
+        '400':
+          description: Direct mutation disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/fire/{id}:
+    post:
+      tags: [Memory]
+      summary: Mutation disabled
+      operationId: mutationFire
+      parameters:
+        - $ref: '#/components/parameters/NeuronIdPath'
+      responses:
+        '400':
+          description: Direct mutation disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/brain/state:
+    get:
+      tags: [Brain]
+      summary: Get brain state
+      operationId: getBrainState
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      responses:
+        '200':
+          description: Brain state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrainStateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/brain/wake:
+    post:
+      tags: [Brain]
+      summary: Force brain wake
+      operationId: wakeBrain
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      responses:
+        '200':
+          description: Wake acknowledgement
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/brain/sleep:
+    post:
+      tags: [Brain]
+      summary: Force brain sleep
+      operationId: sleepBrain
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      responses:
+        '200':
+          description: Sleep acknowledgement
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/brain/stats:
+    get:
+      tags: [Brain]
+      summary: Per-index brain statistics
+      operationId: getBrainStats
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      responses:
+        '200':
+          description: Index stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrainStatsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/stats:
+    get:
+      tags: [Observability]
+      summary: Global pool + lifecycle statistics
+      operationId: getGlobalStats
+      responses:
+        '200':
+          description: Global stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalStatsResponse'
+
+  /v1/synapses:
+    get:
+      tags: [Observability]
+      summary: List synapses for an index
+      operationId: getSynapses
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      responses:
+        '200':
+          description: Synapse list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SynapseListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/graph:
+    get:
+      tags: [Observability]
+      summary: Get graph nodes/edges for visualization
+      operationId: getGraph
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      responses:
+        '200':
+          description: Graph payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/activity:
+    get:
+      tags: [Observability]
+      summary: Get recent neuron/synapse activity
+      operationId: getActivity
+      parameters:
+        - $ref: '#/components/parameters/IndexIdHeader'
+        - $ref: '#/components/parameters/IndexIdQueryCamel'
+        - $ref: '#/components/parameters/IndexIdQuerySnake'
+      responses:
+        '200':
+          description: Activity feed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/registry:
+    get:
+      tags: [Registry]
+      summary: List registry entries
+      operationId: listRegistryEntries
+      responses:
+        '200':
+          description: Registry collection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryListResponse'
+
+    post:
+      tags: [Registry]
+      summary: Create registry entry
+      operationId: createRegistryEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistryCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/registry/{uuid}:
+    get:
+      tags: [Registry]
+      summary: Get registry entry
+      operationId: getRegistryEntry
+      parameters:
+        - $ref: '#/components/parameters/UUIDPath'
+      responses:
+        '200':
+          description: Registry entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryEntry'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags: [Registry]
+      summary: Update registry entry
+      operationId: updateRegistryEntry
+      parameters:
+        - $ref: '#/components/parameters/UUIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistryUpdateRequest'
+      responses:
+        '200':
+          description: Updated registry entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+    delete:
+      tags: [Registry]
+      summary: Delete registry entry
+      operationId: deleteRegistryEntry
+      parameters:
+        - $ref: '#/components/parameters/UUIDPath'
+      responses:
+        '200':
+          description: Delete acknowledgement
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted, uuid]
+                properties:
+                  deleted:
+                    type: boolean
+                  uuid:
+                    type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/registry/find-or-create:
+    post:
+      tags: [Registry]
+      summary: Find-or-create registry entry
+      operationId: findOrCreateRegistryEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistryFindOrCreateRequest'
+      responses:
+        '200':
+          description: Existing entry resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryFindOrCreateResponse'
+        '201':
+          description: New entry created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryFindOrCreateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/login:
+    post:
+      tags: [Admin]
+      summary: Validate admin credentials
+      description: |
+        Validates credentials and returns a success message.
+        Session/token is not issued; clients must send HTTP Basic Auth on subsequent admin requests.
+      operationId: adminLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminLoginRequest'
+      responses:
+        '200':
+          description: Auth success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminLoginSuccess'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/indexes:
+    get:
+      tags: [Admin]
+      summary: List active indexes in worker pool
+      operationId: adminListIndexes
+      security:
+        - AdminBasicAuth: []
+      responses:
+        '200':
+          description: Active index IDs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/indexes/{indexId}:
+    get:
+      tags: [Admin]
+      summary: Get index details
+      operationId: adminGetIndexDetail
+      security:
+        - AdminBasicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AdminIndexIdPath'
+      responses:
+        '200':
+          description: Index stats and lifecycle state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stats:
+                    type: object
+                    additionalProperties: true
+                  state:
+                    type: object
+                    nullable: true
+                    additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Admin]
+      summary: Delete index from memory/disk and optionally registry
+      operationId: adminDeleteIndex
+      security:
+        - AdminBasicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AdminIndexIdPath'
+      responses:
+        '200':
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDeleteIndexResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/indexes/{indexId}/reset:
+    post:
+      tags: [Admin]
+      summary: Truncate index data
+      operationId: adminResetIndex
+      security:
+        - AdminBasicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AdminIndexIdPath'
+      responses:
+        '200':
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reset, truncated, indexId]
+                properties:
+                  reset:
+                    type: boolean
+                  truncated:
+                    type: boolean
+                  indexId:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/indexes/{indexId}/wake:
+    post:
+      tags: [Admin]
+      summary: Force wake for index
+      operationId: adminWakeIndex
+      security:
+        - AdminBasicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AdminIndexIdPath'
+      responses:
+        '200':
+          description: Wake result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [woke, indexId]
+                properties:
+                  woke:
+                    type: boolean
+                  indexId:
+                    type: string
+
+  /admin/indexes/{indexId}/sleep:
+    post:
+      tags: [Admin]
+      summary: Force sleep for index
+      operationId: adminSleepIndex
+      security:
+        - AdminBasicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AdminIndexIdPath'
+      responses:
+        '200':
+          description: Sleep result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [slept, indexId]
+                properties:
+                  slept:
+                    type: boolean
+                  indexId:
+                    type: string
+
+  /admin/indexes/{indexId}/export:
+    get:
+      tags: [Admin]
+      summary: Export index stats snapshot
+      operationId: adminExportIndex
+      security:
+        - AdminBasicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AdminIndexIdPath'
+      responses:
+        '200':
+          description: Export payload (currently same shape as brain stats)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrainStatsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/daemons:
+    get:
+      tags: [Admin]
+      summary: Get daemon status
+      operationId: adminDaemonStatus
+      security:
+        - AdminBasicAuth: []
+      responses:
+        '200':
+          description: Daemon status map
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDaemonStatusResponse'
+
+  /admin/daemons/pause:
+    post:
+      tags: [Admin]
+      summary: Pause daemons (logical endpoint)
+      operationId: adminPauseDaemons
+      security:
+        - AdminBasicAuth: []
+      responses:
+        '200':
+          description: Pause acknowledgement
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [paused]
+                properties:
+                  paused:
+                    type: boolean
+
+  /admin/daemons/resume:
+    post:
+      tags: [Admin]
+      summary: Resume daemons (logical endpoint)
+      operationId: adminResumeDaemons
+      security:
+        - AdminBasicAuth: []
+      responses:
+        '200':
+          description: Resume acknowledgement
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [resumed]
+                properties:
+                  resumed:
+                    type: boolean
+
+  /admin/gc:
+    post:
+      tags: [Admin]
+      summary: Trigger garbage collection hook
+      operationId: adminGC
+      security:
+        - AdminBasicAuth: []
+      responses:
+        '200':
+          description: GC trigger acknowledgement
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [gc]
+                properties:
+                  gc:
+                    type: string
+                    example: triggered
+
+  /admin/persist:
+    post:
+      tags: [Admin]
+      summary: Force persist all active indexes
+      operationId: adminPersist
+      security:
+        - AdminBasicAuth: []
+      responses:
+        '200':
+          description: Persist acknowledgement
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [persisted]
+                properties:
+                  persisted:
+                    type: boolean
+
+  /v1/config:
+    get:
+      tags: [Runtime Config]
+      summary: Get active runtime configuration
+      operationId: getRuntimeConfig
+      security:
+        - AdminBasicAuth: []
+      responses:
+        '200':
+          description: Runtime config snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigGetResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      tags: [Runtime Config]
+      summary: Patch runtime configuration
+      description: |
+        Accepted runtime patch sections:
+        - `lifecycle` (`idleThreshold`, `sleepThreshold`, `dormantThreshold`)
+        - `daemons` (`decayInterval`, `consolidateInterval`, `pruneInterval`, `persistInterval`, `reorgInterval`)
+        - `worker` (`maxIdleTime`)
+        - `registry` (`enabled`)
+        - `matrix` (`maxNeurons`)
+        - `security` (`allowedOrigins`, `maxRequestBody`)
+        - `vector` (`alpha`)
+      operationId: setRuntimeConfig
+      security:
+        - AdminBasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigPatchRequest'
+      responses:
+        '200':
+          description: Patch applied (full or partial)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigPatchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/config:
+    get:
+      tags: [Runtime Config]
+      summary: Alias of GET /v1/config
+      operationId: getRuntimeConfigAlias
+      security:
+        - AdminBasicAuth: []
+      responses:
+        '200':
+          description: Runtime config snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigGetResponse'
+
+    post:
+      tags: [Runtime Config]
+      summary: Alias of POST /v1/config
+      operationId: setRuntimeConfigAlias
+      security:
+        - AdminBasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigPatchRequest'
+      responses:
+        '200':
+          description: Patch applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigPatchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+components:
+  securitySchemes:
+    AdminBasicAuth:
+      type: http
+      scheme: basic
+
+  parameters:
+    IndexIdHeader:
+      in: header
+      name: X-Index-ID
+      required: false
+      schema:
+        type: string
+      description: Preferred index selector. Use one of X-Index-ID, indexId, index_id.
+
+    IndexIdQueryCamel:
+      in: query
+      name: indexId
+      required: false
+      schema:
+        type: string
+      description: Alternate index selector (camelCase).
+
+    IndexIdQuerySnake:
+      in: query
+      name: index_id
+      required: false
+      schema:
+        type: string
+      description: Alternate index selector (snake_case).
+
+    NeuronIdPath:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+
+    UUIDPath:
+      in: path
+      name: uuid
+      required: true
+      schema:
+        type: string
+
+    AdminIndexIdPath:
+      in: path
+      name: indexId
+      required: true
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Unauthorized:
+      description: Unauthorized
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          description: Present on Basic-auth-protected routes when credentials are missing.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    PayloadTooLarge:
+      description: Payload too large
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [ok, error, code, status]
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+        error:
+          type: string
+        code:
+          type: string
+          enum:
+            - BAD_REQUEST
+            - INVALID_JSON
+            - INVALID_CONTENT
+            - PAYLOAD_TOO_LARGE
+            - METHOD_NOT_ALLOWED
+            - NOT_FOUND
+            - INTERNAL_ERROR
+            - UNAUTHORIZED
+            - RATE_LIMITED
+            - CONFLICT
+            - MUTATION_DISABLED
+            - INDEX_ID_REQUIRED
+            - NEURON_ID_REQUIRED
+            - NEURON_NOT_FOUND
+            - QUERY_REQUIRED
+            - UUID_REQUIRED
+            - UUID_NOT_REGISTERED
+            - UUID_NOT_FOUND
+            - UUID_CONFLICT
+        status:
+          type: integer
+
+    HealthResponse:
+      type: object
+      required: [status, timestamp, activeIndexes]
+      properties:
+        status:
+          type: string
+          example: healthy
+        timestamp:
+          type: string
+          format: date-time
+        activeIndexes:
+          type: integer
+
+    NeuronDocument:
+      type: object
+      required: [_id, content, energy, depth, position, accessCount, createdAt, lastFiredAt, metadata]
+      properties:
+        _id:
+          type: string
+        id:
+          type: string
+          description: Alias present on write responses.
+        content:
+          type: string
+        energy:
+          type: number
+        depth:
+          type: integer
+        position:
+          type: array
+          items:
+            type: number
+        tags:
+          type: array
+          items:
+            type: string
+        accessCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        lastFiredAt:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+
+    WriteRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          description: Neuron content payload (validated by server size/content rules).
+        parent_id:
+          type: string
+          description: Optional parent neuron ID. Positions the new neuron spatially near the parent.
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Optional string key-value metadata stored on the neuron.
+            Use for grouping by thread_id, role, source, dataset_name, etc.
+            Example: {"thread_id": "conv-001", "role": "user"}
+        tags:
+          type: array
+          items:
+            type: string
+          description: Optional classification tags.
+
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        depth:
+          type: integer
+          minimum: 1
+          maximum: 8
+          default: 2
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 20
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Optional metadata filter/boost. Key-value pairs of string type.
+            strict=false (default): neurons matching keys are ranked higher (+30% per key).
+            strict=true: only neurons matching ALL key-value pairs are returned.
+            Example: {"thread_id": "conv-001", "role": "assistant"}
+        strict:
+          type: boolean
+          default: false
+          description: |
+            If true, hard-filter results to only neurons matching ALL metadata key-value pairs.
+            Applied after spread activation. Default false (soft boost mode).
+
+    SearchResponse:
+      type: object
+      required: [results, count, query, depth]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/NeuronDocument'
+        count:
+          type: integer
+        query:
+          type: string
+        depth:
+          type: integer
+
+    RecallResponse:
+      type: object
+      required: [memories, neurons, count]
+      properties:
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/NeuronDocument'
+        neurons:
+          type: array
+          items:
+            $ref: '#/components/schemas/NeuronDocument'
+        count:
+          type: integer
+
+    ContextRequest:
+      type: object
+      required: [cue]
+      properties:
+        cue:
+          type: string
+        maxTokens:
+          type: integer
+          minimum: 1
+          maximum: 16000
+          default: 2000
+        depth:
+          type: integer
+          minimum: 1
+          maximum: 8
+          default: 2
+
+    ContextResponse:
+      type: object
+      required: [context, text, neuronsUsed, neuronCount, estimatedTokens, tokenCount, cue]
+      properties:
+        context:
+          type: string
+        text:
+          type: string
+          description: Alias of `context`.
+        neuronsUsed:
+          type: integer
+        neuronCount:
+          type: integer
+          description: Alias of `neuronsUsed`.
+        estimatedTokens:
+          type: integer
+        tokenCount:
+          type: integer
+          description: Alias of `estimatedTokens`.
+        cue:
+          type: string
+
+    CommandRequest:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum:
+            - insert
+            - find
+            - findOne
+            - update
+            - updateOne
+            - delete
+            - deleteOne
+            - aggregate
+            - count
+            - activate
+            - search
+            - stats
+        collection:
+          type: string
+          description: Usually `neurons` or `synapses`.
+        document:
+          type: object
+          additionalProperties: true
+        filter:
+          type: object
+          additionalProperties: true
+        update:
+          type: object
+          additionalProperties: true
+        pipeline:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        options:
+          type: object
+          properties:
+            limit:
+              type: integer
+            skip:
+              type: integer
+            sort:
+              type: object
+              additionalProperties:
+                type: integer
+            projection:
+              type: object
+              additionalProperties:
+                type: integer
+            depth:
+              type: integer
+            upsert:
+              type: boolean
+
+    CommandResponse:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        data:
+          nullable: true
+        count:
+          type: integer
+        insertedId:
+          type: string
+        modifiedCount:
+          type: integer
+        deletedCount:
+          type: integer
+        error:
+          type: string
+
+    SimpleStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+
+    BrainStateResponse:
+      oneOf:
+        - type: object
+          required: [state]
+          properties:
+            state:
+              type: string
+              enum: [dormant]
+        - type: object
+          required: [state, lastInvoke, invokeCount]
+          properties:
+            state:
+              type: string
+              enum: [active, idle, sleeping, dormant]
+            lastInvoke:
+              type: string
+              format: date-time
+            invokeCount:
+              type: integer
+
+    BrainStatsResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        index_id:
+          type: string
+        neuron_count:
+          type: integer
+        synapse_count:
+          type: integer
+        current_dimension:
+          type: integer
+        depth_distribution:
+          type: object
+          additionalProperties:
+            type: integer
+        average_energy:
+          type: number
+        total_activations:
+          type: integer
+        last_activity:
+          type: string
+          format: date-time
+        version:
+          type: integer
+
+    GlobalStatsResponse:
+      type: object
+      required: [pool, lifecycle]
+      properties:
+        pool:
+          type: object
+          additionalProperties: true
+        lifecycle:
+          type: object
+          additionalProperties: true
+
+    SynapseInfo:
+      type: object
+      required: [id, from_id, to_id, weight, co_fire_count]
+      properties:
+        id:
+          type: string
+        from_id:
+          type: string
+        to_id:
+          type: string
+        weight:
+          type: number
+        co_fire_count:
+          type: integer
+
+    SynapseListResponse:
+      type: object
+      required: [synapses, count]
+      properties:
+        synapses:
+          type: array
+          items:
+            $ref: '#/components/schemas/SynapseInfo'
+        count:
+          type: integer
+
+    GraphNode:
+      type: object
+      required: [id, content, energy, depth, accessCount, position]
+      properties:
+        id:
+          type: string
+        content:
+          type: string
+        energy:
+          type: number
+        depth:
+          type: integer
+        accessCount:
+          type: integer
+        position:
+          type: array
+          items:
+            type: number
+
+    GraphEdge:
+      type: object
+      required: [source, target, weight, coFireCount]
+      properties:
+        source:
+          type: string
+        target:
+          type: string
+        weight:
+          type: number
+        coFireCount:
+          type: integer
+
+    GraphResponse:
+      type: object
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNode'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+
+    ActivityEvent:
+      type: object
+      required: [timestamp, type, action, details]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        type:
+          type: string
+        action:
+          type: string
+        details:
+          type: string
+
+    ActivityResponse:
+      type: object
+      required: [events, count]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivityEvent'
+        count:
+          type: integer
+
+    RegistryEntry:
+      type: object
+      required: [uuid, createdAt, updatedAt]
+      properties:
+        uuid:
+          type: string
+        metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    RegistryCreateRequest:
+      type: object
+      required: [uuid]
+      properties:
+        uuid:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    RegistryUpdateRequest:
+      type: object
+      properties:
+        uuid:
+          type: string
+          description: Optional new UUID value; if omitted existing UUID is kept.
+        metadata:
+          type: object
+          additionalProperties: true
+
+    RegistryListResponse:
+      type: object
+      required: [entries, count]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/RegistryEntry'
+        count:
+          type: integer
+
+    RegistryFindOrCreateRequest:
+      type: object
+      required: [uuid]
+      properties:
+        uuid:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    RegistryFindOrCreateResponse:
+      type: object
+      required: [uuid, created, createdAt, updatedAt]
+      properties:
+        uuid:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        created:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    AdminLoginRequest:
+      type: object
+      required: [user, password]
+      properties:
+        user:
+          type: string
+        password:
+          type: string
+
+    AdminLoginSuccess:
+      type: object
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        message:
+          type: string
+
+    AdminDeleteIndexResponse:
+      type: object
+      required: [deleted, truncated, registryDeleted, indexId]
+      properties:
+        deleted:
+          type: boolean
+        truncated:
+          type: boolean
+        registryDeleted:
+          type: boolean
+        indexId:
+          type: string
+
+    AdminDaemonStatusResponse:
+      type: object
+      required: [status, daemons]
+      properties:
+        status:
+          type: string
+        daemons:
+          type: object
+          additionalProperties:
+            type: string
+
+    ConfigGetResponse:
+      type: object
+      required: [server, storage, matrix, lifecycle, daemons, worker, registry, vector, admin, security]
+      properties:
+        server:
+          type: object
+          properties:
+            httpAddr:
+              type: string
+        storage:
+          type: object
+          properties:
+            dataPath:
+              type: string
+            compress:
+              type: boolean
+        matrix:
+          type: object
+          properties:
+            minDimension:
+              type: integer
+            maxDimension:
+              type: integer
+            maxNeurons:
+              type: integer
+        lifecycle:
+          type: object
+          properties:
+            idleThreshold:
+              type: string
+            sleepThreshold:
+              type: string
+            dormantThreshold:
+              type: string
+        daemons:
+          type: object
+          properties:
+            decayInterval:
+              type: string
+            consolidateInterval:
+              type: string
+            pruneInterval:
+              type: string
+            persistInterval:
+              type: string
+            reorgInterval:
+              type: string
+        worker:
+          type: object
+          properties:
+            maxIdleTime:
+              type: string
+        registry:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+        vector:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            modelPath:
+              type: string
+            gpuLayers:
+              type: integer
+            alpha:
+              type: number
+        admin:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            user:
+              type: string
+        security:
+          type: object
+          properties:
+            allowedOrigins:
+              type: string
+            maxRequestBody:
+              type: integer
+              format: int64
+            tlsEnabled:
+              type: boolean
+            readTimeout:
+              type: string
+            writeTimeout:
+              type: string
+
+    ConfigPatchRequest:
+      type: object
+      properties:
+        lifecycle:
+          type: object
+          properties:
+            idleThreshold:
+              type: string
+            sleepThreshold:
+              type: string
+            dormantThreshold:
+              type: string
+        daemons:
+          type: object
+          properties:
+            decayInterval:
+              type: string
+            consolidateInterval:
+              type: string
+            pruneInterval:
+              type: string
+            persistInterval:
+              type: string
+            reorgInterval:
+              type: string
+        worker:
+          type: object
+          properties:
+            maxIdleTime:
+              type: string
+        registry:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+        matrix:
+          type: object
+          properties:
+            maxNeurons:
+              type: integer
+        security:
+          type: object
+          properties:
+            allowedOrigins:
+              type: string
+            maxRequestBody:
+              type: integer
+              format: int64
+        vector:
+          type: object
+          properties:
+            alpha:
+              type: number
+              minimum: 0
+              maximum: 1
+
+    ConfigPatchResponse:
+      type: object
+      required: [ok, changed, count]
+      properties:
+        ok:
+          type: boolean
+        changed:
+          type: array
+          items:
+            type: string
+        count:
+          type: integer
+        rejected:
+          type: array
+          items:
+            type: string

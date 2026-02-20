@@ -1,0 +1,92 @@
+# Dockerfile.vector
+# QubicDB with vector layer (libllama_go.so built from kelindar/search).
+# Used by benchmarks/deepage/docker-compose.vector-prefix.yml
+
+# ── Stage 1: build libllama_go.so via kelindar/search ────────────────────────
+FROM debian:bookworm-slim AS vector-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake make clang ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone kelindar/search with llama.cpp submodule
+RUN git clone --recurse-submodules https://github.com/kelindar/search /search
+RUN git -C /search lfs pull 2>/dev/null || true
+
+# Patch load_context to set n_batch=n_ubatch=ctx_size
+# (fixes: GGML_ASSERT(cparams.n_ubatch >= n_tokens) for encoder models)
+RUN sed -i 's/params\.n_ctx\s*=\s*ctx_size;/params.n_ctx = ctx_size;\n        params.n_batch = ctx_size;\n        params.n_ubatch = ctx_size;/' /search/llama-go.cpp/llama-go.cpp
+
+# Build — clang required on ARM64 Linux (gcc-12 has float16 NEON intrinsic bug)
+RUN mkdir /search/build && \
+    cmake -S /search -B /search/build \
+      -DBUILD_SHARED_LIBS=ON \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_COMPILER=clang++ \
+      -DCMAKE_C_COMPILER=clang && \
+    cmake --build /search/build --config Release -j"$(nproc)"
+
+# ── Stage 2: build qubicdb Go binary ─────────────────────────────────────────
+FROM golang:1.23-bookworm AS go-builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o qubicdb ./cmd/qubicdb
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o qubicdb-cli ./cmd/qubicdb-cli
+
+# ── Stage 3: runtime ──────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -g 1000 qubicdb && \
+    useradd -u 1000 -g qubicdb -s /bin/sh -m qubicdb
+
+RUN mkdir -p /app/data /usr/local/lib && chown -R qubicdb:qubicdb /app
+
+# Copy Go binaries
+COPY --from=go-builder /app/qubicdb .
+COPY --from=go-builder /app/qubicdb-cli .
+
+# Copy libllama_go.so and run ldconfig
+# kelindar/search builds to /search/build/libllama_go.so (Linux shared lib)
+COPY --from=vector-builder /search/build/lib/libllama_go.so /usr/local/lib/libllama_go.so
+RUN ldconfig
+
+USER qubicdb
+
+ENV QUBICDB_HTTP_ADDR=":6060"
+ENV QUBICDB_DATA_PATH="/app/data"
+ENV QUBICDB_ADMIN_ENABLED="true"
+ENV QUBICDB_ALLOWED_ORIGINS="http://localhost:6060"
+ENV QUBICDB_MCP_ENABLED="false"
+ENV QUBICDB_MCP_PATH="/mcp"
+ENV QUBICDB_MCP_STATELESS="true"
+ENV QUBICDB_MCP_RATE_LIMIT_RPS="30"
+ENV QUBICDB_MCP_RATE_LIMIT_BURST="60"
+ENV QUBICDB_MCP_ENABLE_PROMPTS="true"
+ENV QUBICDB_VECTOR_ENABLED="true"
+ENV QUBICDB_VECTOR_MODEL_PATH="/app/dist/MiniLM-L6-v2.Q8_0.gguf"
+ENV QUBICDB_VECTOR_GPU_LAYERS="0"
+ENV QUBICDB_VECTOR_ALPHA="0.6"
+ENV QUBICDB_VECTOR_QUERY_REPEAT="2"
+ENV QUBICDB_VECTOR_EMBED_CONTEXT_SIZE="512"
+
+EXPOSE 6060
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=6 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:6060/health || exit 1
+
+ENTRYPOINT ["./qubicdb"]
