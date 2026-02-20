@@ -419,4 +419,4 @@ MIT
 
 ---
 
-Developed by Deniz Umut Dereli
+Developed by [Deniz Umut Dereli](https://github.com/denizumutdereli)
