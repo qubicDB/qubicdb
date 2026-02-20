@@ -2,7 +2,17 @@
 
 Thank you for your interest in contributing to QubicDB.
 
-## Getting Started
+## Install
+
+```bash
+# Install server binary
+go install github.com/qubicDB/qubicdb/cmd/qubicdb@latest
+
+# Install CLI
+go install github.com/qubicDB/qubicdb/cmd/qubicdb-cli@latest
+```
+
+## Getting Started (from source)
 
 ```bash
 git clone https://github.com/qubicDB/qubicdb.git
