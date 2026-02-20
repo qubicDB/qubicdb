@@ -2,6 +2,9 @@
 
 **A brain-like recursive memory system for LLM applications**
 
+[![Docker Hub](https://img.shields.io/docker/v/qubicdb/qubicdb?label=Docker%20Hub&logo=docker&color=0db7ed)](https://hub.docker.com/r/qubicdb/qubicdb)
+[![Docker Pulls](https://img.shields.io/docker/pulls/qubicdb/qubicdb?color=0db7ed)](https://hub.docker.com/r/qubicdb/qubicdb)
+
 ```
    ____        __    _      ____  ____
   / __ \__  __/ /_  (_)____/ __ \/ __ )
@@ -11,6 +14,25 @@
 ```
 
 QubicDB is an organic memory engine inspired by biological brain mechanics. It creates an isolated, self-organizing, Hebbian-strengthened brain instance per index.
+
+---
+
+## Quickstart
+
+```bash
+# Pull from Docker Hub
+docker pull qubicdb/qubicdb:latest
+
+# Run
+docker run -d \
+  -p 6060:6060 \
+  -v $(pwd)/data:/app/data \
+  -e QUBICDB_ADMIN_USER=admin \
+  -e QUBICDB_ADMIN_PASSWORD=changeme \
+  qubicdb/qubicdb:1.0.0
+```
+
+Docker Hub: [hub.docker.com/r/qubicdb/qubicdb](https://hub.docker.com/r/qubicdb/qubicdb)
 
 ---
 
