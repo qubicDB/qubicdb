@@ -112,7 +112,7 @@ func TestHealthEndpoint(t *testing.T) {
 
 func TestCORS_DefaultOrigin(t *testing.T) {
 	s := newTestServer(t, nil)
-	rr := doRequest(t, s, "OPTIONS", "/health", "", nil)
+	rr := doRequest(t, s, "OPTIONS", "/health", "", map[string]string{"Origin": "http://localhost:6060"})
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("OPTIONS expected 200, got %d", rr.Code)
@@ -127,7 +127,7 @@ func TestCORS_CustomOrigin(t *testing.T) {
 	s := newTestServer(t, func(cfg *core.Config) {
 		cfg.Security.AllowedOrigins = "https://app.example.com"
 	})
-	rr := doRequest(t, s, "OPTIONS", "/health", "", nil)
+	rr := doRequest(t, s, "OPTIONS", "/health", "", map[string]string{"Origin": "https://app.example.com"})
 
 	origin := rr.Header().Get("Access-Control-Allow-Origin")
 	if origin != "https://app.example.com" {

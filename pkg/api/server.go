@@ -194,7 +194,24 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		}
 
 		// CORS — driven by config
-		w.Header().Set("Access-Control-Allow-Origin", s.config.Security.AllowedOrigins)
+		// AllowedOrigins may be comma-separated; match against the request Origin header.
+		requestOrigin := r.Header.Get("Origin")
+		if requestOrigin != "" {
+			allowed := false
+			if s.config.Security.AllowedOrigins == "*" {
+				allowed = true
+			} else {
+				for _, o := range strings.Split(s.config.Security.AllowedOrigins, ",") {
+					if strings.TrimSpace(o) == requestOrigin {
+						allowed = true
+						break
+					}
+				}
+			}
+			if allowed {
+				w.Header().Set("Access-Control-Allow-Origin", requestOrigin)
+			}
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Index-ID, Authorization")
 
