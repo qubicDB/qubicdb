@@ -3,7 +3,7 @@ package engine
 import (
 	"testing"
 
-	"github.com/denizumutdereli/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/core"
 )
 
 func TestSearcherBasicSearch(t *testing.T) {

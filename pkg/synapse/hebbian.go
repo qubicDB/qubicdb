@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/denizumutdereli/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/core"
 )
 
 // HebbianEngine implements Hebbian learning for synapse formation

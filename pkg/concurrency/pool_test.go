@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/denizumutdereli/qubicdb/pkg/core"
-	"github.com/denizumutdereli/qubicdb/pkg/persistence"
+	"github.com/qubicDB/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/persistence"
 )
 
 func setupTestPool(t *testing.T) (*WorkerPool, string) {

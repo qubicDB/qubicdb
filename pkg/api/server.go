@@ -17,14 +17,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/denizumutdereli/qubicdb/pkg/api/apierr"
-	"github.com/denizumutdereli/qubicdb/pkg/concurrency"
-	"github.com/denizumutdereli/qubicdb/pkg/core"
-	"github.com/denizumutdereli/qubicdb/pkg/daemon"
-	"github.com/denizumutdereli/qubicdb/pkg/lifecycle"
-	mcpapi "github.com/denizumutdereli/qubicdb/pkg/mcp"
-	"github.com/denizumutdereli/qubicdb/pkg/protocol"
-	"github.com/denizumutdereli/qubicdb/pkg/registry"
+	"github.com/qubicDB/qubicdb/pkg/api/apierr"
+	"github.com/qubicDB/qubicdb/pkg/concurrency"
+	"github.com/qubicDB/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/daemon"
+	"github.com/qubicDB/qubicdb/pkg/lifecycle"
+	mcpapi "github.com/qubicDB/qubicdb/pkg/mcp"
+	"github.com/qubicDB/qubicdb/pkg/protocol"
+	"github.com/qubicDB/qubicdb/pkg/registry"
 )
 
 // Server is the HTTP/REST API server.

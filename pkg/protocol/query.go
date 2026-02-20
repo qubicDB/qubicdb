@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/denizumutdereli/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/core"
 )
 
 // Query represents a MongoDB-like query

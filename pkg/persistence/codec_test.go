@@ -3,7 +3,7 @@ package persistence
 import (
 	"testing"
 
-	"github.com/denizumutdereli/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/core"
 )
 
 func TestCodecEncodeDecodeWithCompression(t *testing.T) {

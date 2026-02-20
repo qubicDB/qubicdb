@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/denizumutdereli/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/core"
 )
 
 func newTestMatrix() *core.Matrix {

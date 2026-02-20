@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/denizumutdereli/qubicdb/pkg/vector"
+	"github.com/qubicDB/qubicdb/pkg/vector"
 )
 
 // TestCleanTextPipeline_E2E verifies that CleanText produces non-empty,

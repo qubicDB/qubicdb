@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/denizumutdereli/qubicdb/pkg/api/apierr"
-	"github.com/denizumutdereli/qubicdb/pkg/concurrency"
-	"github.com/denizumutdereli/qubicdb/pkg/core"
-	"github.com/denizumutdereli/qubicdb/pkg/protocol"
+	"github.com/qubicDB/qubicdb/pkg/api/apierr"
+	"github.com/qubicDB/qubicdb/pkg/concurrency"
+	"github.com/qubicDB/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/protocol"
 )
 
 type mcpBackend struct {

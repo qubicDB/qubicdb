@@ -4,7 +4,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/denizumutdereli/qubicdb/pkg/concurrency"
+	"github.com/qubicDB/qubicdb/pkg/concurrency"
 )
 
 // ---------------------------------------------------------------------------

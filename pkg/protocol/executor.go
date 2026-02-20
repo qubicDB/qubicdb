@@ -3,8 +3,8 @@ package protocol
 import (
 	"sort"
 
-	"github.com/denizumutdereli/qubicdb/pkg/concurrency"
-	"github.com/denizumutdereli/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/concurrency"
+	"github.com/qubicDB/qubicdb/pkg/core"
 )
 
 // CommandHandler is a function that handles a specific command type.

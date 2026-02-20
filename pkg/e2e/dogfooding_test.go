@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/denizumutdereli/qubicdb/pkg/concurrency"
-	"github.com/denizumutdereli/qubicdb/pkg/core"
-	"github.com/denizumutdereli/qubicdb/pkg/daemon"
-	"github.com/denizumutdereli/qubicdb/pkg/lifecycle"
-	"github.com/denizumutdereli/qubicdb/pkg/persistence"
+	"github.com/qubicDB/qubicdb/pkg/concurrency"
+	"github.com/qubicDB/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/daemon"
+	"github.com/qubicDB/qubicdb/pkg/lifecycle"
+	"github.com/qubicDB/qubicdb/pkg/persistence"
 )
 
 // TestDogfoodingProjectMemory tests QubicDB by storing and recalling

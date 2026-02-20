@@ -5,11 +5,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/denizumutdereli/qubicdb/pkg/core"
-	"github.com/denizumutdereli/qubicdb/pkg/engine"
-	"github.com/denizumutdereli/qubicdb/pkg/sentiment"
-	"github.com/denizumutdereli/qubicdb/pkg/synapse"
-	"github.com/denizumutdereli/qubicdb/pkg/vector"
+	"github.com/qubicDB/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/engine"
+	"github.com/qubicDB/qubicdb/pkg/sentiment"
+	"github.com/qubicDB/qubicdb/pkg/synapse"
+	"github.com/qubicDB/qubicdb/pkg/vector"
 )
 
 // Operation types for the worker

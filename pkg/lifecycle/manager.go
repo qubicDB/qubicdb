@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/denizumutdereli/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/core"
 )
 
 // Manager tracks activity and controls brain lifecycle states

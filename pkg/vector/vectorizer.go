@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/denizumutdereli/qubicdb/pkg/vector/simd"
+	"github.com/qubicDB/qubicdb/pkg/vector/simd"
 	"github.com/sentencizer/sentencizer"
 )
 

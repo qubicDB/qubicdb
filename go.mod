@@ -1,4 +1,4 @@
-module github.com/denizumutdereli/qubicdb
+module github.com/qubicDB/qubicdb
 
 go 1.23.0
 

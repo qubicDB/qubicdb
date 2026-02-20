@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/denizumutdereli/qubicdb/pkg/core"
-	"github.com/denizumutdereli/qubicdb/pkg/persistence"
-	"github.com/denizumutdereli/qubicdb/pkg/sentiment"
-	"github.com/denizumutdereli/qubicdb/pkg/vector"
+	"github.com/qubicDB/qubicdb/pkg/core"
+	"github.com/qubicDB/qubicdb/pkg/persistence"
+	"github.com/qubicDB/qubicdb/pkg/sentiment"
+	"github.com/qubicDB/qubicdb/pkg/vector"
 )
 
 // WorkerPool manages all brain workers with isolation
