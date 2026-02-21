@@ -1,0 +1,234 @@
+# QubicDB
+
+> Brain-like memory database for LLM agents. Written in Go. Each index is an isolated brain with neurons, synapses, lifecycle states, and hybrid search. Ships with MCP endpoint, REST API, CLI, admin UI, and SDKs.
+
+## Overview
+
+QubicDB gives AI agents persistent, per-index memory. A "neuron" is a stored memory. Neurons strengthen on access, decay over time, and form synapses with co-activated neighbors (Hebbian learning). Search combines lexical matching + vector embeddings + brain-mechanics scoring (energy, recency, depth, sentiment). Each index runs in its own goroutine with an organic N-dimensional matrix.
+
+## Repositories
+
+| Repo | What It Does |
+|------|-------------|
+| `qubicdb/qubicdb` | Core server (Go). HTTP API + MCP endpoint + CLI + persistence |
+| `qubicdb/docs` | API reference, OpenAPI spec, architecture docs |
+| `qubicdb/sdks` | Official client SDKs (TypeScript, JS, Python, Go, React, Next.js, Vue, Nuxt, Ruby) |
+| `qubicdb/skills` | Claude Code agent skills marketplace (MCP-based) |
+| `qubicdb/qubicdb-ui` | React/TypeScript admin dashboard |
+
+## Docker (Quickstart)
+
+```bash
+docker pull qubicdb/qubicdb:latest
+docker run -d -p 6060:6060 -v $(pwd)/data:/app/data qubicdb/qubicdb:latest
+```
+
+Health: `GET http://localhost:6060/health`
+
+Admin UI: `docker pull qubicdb/qubicdb-ui` → port 5173
+
+## Local (Go)
+
+```bash
+go run ./cmd/qubicdb --http-addr :6060 --data-path ./data --registry
+```
+
+Or with YAML: `go run ./cmd/qubicdb --config ./qubicdb.yaml`
+
+## Index Scoping
+
+Every memory operation requires an index ID. Pass it via:
+- `X-Index-ID` header (preferred)
+- `index_id` query param
+
+Each index is fully isolated — own matrix, own worker, own lifecycle.
+
+## API Endpoints
+
+Base: `http://localhost:6060`
+
+### Memory (index-scoped)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /v1/write | Write a neuron. Body: `{"content":"...", "metadata":{"thread_id":"...","role":"..."}}` |
+| GET | /v1/read/{id} | Read neuron by ID |
+| GET | /v1/recall | List neurons (limit, offset) |
+| POST | /v1/search | Hybrid search. Body: `{"query":"...", "depth":2, "limit":20, "metadata":{}, "strict":false}` |
+| POST | /v1/context | Token-budgeted RAG context. Body: `{"cue":"...", "maxTokens":2000}` |
+| POST | /v1/command | MongoDB-like queries. Supports find, findOne, count, stats |
+
+### Brain State (index-scoped)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /v1/brain/state | Current lifecycle state |
+| POST | /v1/brain/wake | Force wake |
+| POST | /v1/brain/sleep | Force sleep |
+| GET | /v1/brain/stats | Matrix stats (neuron count, synapse count, energy) |
+
+### Registry
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /v1/registry | Register a UUID |
+| POST | /v1/registry/find-or-create | Idempotent find-or-create |
+| GET | /v1/registry | List registered UUIDs |
+| GET | /v1/registry/{uuid} | Get entry |
+| DELETE | /v1/registry/{uuid} | Delete entry |
+
+### Admin (requires Basic Auth when admin.enabled=true)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /admin/indexes | List all indexes |
+| DELETE | /admin/indexes/{id} | Delete index |
+| POST | /admin/indexes/{id}/reset | Reset index data |
+| GET/POST | /v1/config | Get or patch runtime config |
+| POST | /admin/daemons/pause | Pause background daemons |
+| POST | /admin/daemons/resume | Resume background daemons |
+
+### Utility
+
+`GET /health` · `GET /v1/stats` · `GET /v1/graph` · `GET /v1/synapses` · `GET /v1/activity`
+
+## Metadata
+
+Neurons accept optional `metadata` as `map[string]string`. Common keys: `thread_id`, `role`, `source`, `dataset_name`.
+
+Search behavior with metadata:
+- `strict: false` (default) — matching metadata boosts score (+30% per key match)
+- `strict: true` — only neurons matching ALL key-value pairs are returned
+
+## Lifecycle States
+
+```
+Active →(30s idle)→ Idle →(5m)→ Sleeping →(30m)→ Dormant
+   ↑                                                  |
+   └──────────── any operation auto-wakes ────────────┘
+```
+
+Dormant workers are evicted from memory. Matrix reloads from disk on next access.
+
+## Search Scoring
+
+Hybrid: `baseScore = α × vectorScore + (1-α) × normalizedLexicalScore` (default α=0.6)
+
+Multipliers applied: energy boost, recency boost, access count, depth penalty, sentiment match, metadata match.
+
+Spread activation: neighbors connected via synapses are included up to `depth` hops.
+
+## Neuron Fields
+
+`id` (UUID), `content` (text), `energy` (0-1, decays), `depth` (consolidation level), `created_at`, `last_fired_at`, `access_count`, `tags`, `embedding` (384-dim float32), `metadata` (map), `content_hash` (dedup key).
+
+Born at energy=1.0. Fired: +0.3. Decay reduces over time. Never deleted — becomes dormant.
+
+## MCP Endpoint
+
+Enable: `mcp.enabled: true` in config. Mounts at `/mcp` (streamable HTTP).
+
+Tools: `qubicdb_write`, `qubicdb_read`, `qubicdb_search`, `qubicdb_recall`, `qubicdb_context`, `qubicdb_registry_find_or_create`
+
+Auth: `X-API-Key` header or `Authorization: Bearer <key>` (set via `mcp.apiKey`).
+
+IDE config example (Claude Code `.claude/settings.local.json`):
+```json
+{"mcpServers":{"qubicdb":{"type":"url","url":"http://localhost:6060/mcp"}}}
+```
+
+Works with: Claude Code, Cursor, VS Code Copilot, Windsurf.
+
+## Configuration
+
+Priority: CLI flags > YAML file > env vars (`QUBICDB_*`) > defaults.
+
+Key settings:
+
+| Setting | Default | Env Var |
+|---------|---------|---------|
+| HTTP address | :6060 | QUBICDB_HTTP_ADDR |
+| Data path | ./data | QUBICDB_DATA_PATH |
+| Max neurons/index | 1000000 | QUBICDB_MAX_NEURONS |
+| Registry guard | false | QUBICDB_REGISTRY_ENABLED |
+| Vector search | true | QUBICDB_VECTOR_ENABLED |
+| Vector alpha | 0.6 | QUBICDB_VECTOR_ALPHA |
+| Vector model | ./dist/MiniLM-L6-v2.Q8_0.gguf | QUBICDB_VECTOR_MODEL_PATH |
+| MCP enabled | false | QUBICDB_MCP_ENABLED |
+| MCP API key | (empty) | QUBICDB_MCP_API_KEY |
+| Admin enabled | true | QUBICDB_ADMIN_ENABLED |
+| Admin password | qubicdb | QUBICDB_ADMIN_PASSWORD |
+| Idle threshold | 30s | QUBICDB_IDLE_THRESHOLD |
+| Sleep threshold | 5m | QUBICDB_SLEEP_THRESHOLD |
+| Dormant threshold | 30m | QUBICDB_DORMANT_THRESHOLD |
+| WAL enabled | true | QUBICDB_WAL_ENABLED |
+| Fsync policy | interval | QUBICDB_FSYNC_POLICY |
+| Compress | true | QUBICDB_COMPRESS |
+
+Runtime-patchable via `POST /v1/config`: lifecycle thresholds, daemon intervals, vector.alpha, registry.enabled, matrix.maxNeurons, security.allowedOrigins.
+
+## Connection Strings
+
+```
+qubicdb://localhost/my-index
+qubicdb://admin:secret@host:6060/index-id
+qubicdb+tls://admin:secret@prod.example.com/index-id
+```
+
+## SDKs
+
+| Package | Registry | Install |
+|---------|----------|---------|
+| `qubicdb` | npm | `npm i qubicdb` |
+| `qubicdb-js` | npm | `npm i qubicdb-js` |
+| `qubicdb` | PyPI | `pip install qubicdb` |
+| `github.com/qubicdb/qubicdb-go` | Go | `go get` |
+| `@qubicdb/react` | npm | `npm i @qubicdb/react` |
+| `@qubicdb/next` | npm | `npm i @qubicdb/next` |
+| `@qubicdb/vue` | npm | `npm i @qubicdb/vue` |
+| `@qubicdb/nuxt` | npm | `npm i @qubicdb/nuxt` |
+| `qubicdb` | RubyGems | `gem install qubicdb` |
+
+TypeScript core is the foundation. Framework SDKs (React/Next/Vue/Nuxt) depend on `qubicdb` as peer dependency.
+
+## Agent Skills
+
+Repo: `qubicdb/skills` — Claude Code plugin marketplace.
+
+Core skills (`qubicdb-skills`): qubic-init, qubic-write, qubic-search, qubic (full orchestration). All MCP-only, tool format: `qubicdb:tool_name`.
+
+Experimental skills (`qubicdb-experimental`): multi-index-research, agent-to-agent, conversation-chains, sentiment-journal, knowledge-base-server, rag-context-assembly.
+
+Install: add plugin repo URL in Claude Code settings.
+
+## Error Handling
+
+All errors return: `{"ok":false,"error":"message","code":"MACHINE_CODE","status":400}`
+
+Branch on `code`, not message text. Key codes: `INDEX_ID_REQUIRED`, `NEURON_NOT_FOUND`, `QUERY_REQUIRED`, `UUID_NOT_REGISTERED`, `MUTATION_DISABLED`, `RATE_LIMITED` (429), `UNAUTHORIZED` (401), `PAYLOAD_TOO_LARGE` (413).
+
+## Background Daemons
+
+| Daemon | Default | Purpose |
+|--------|---------|---------|
+| Decay | 1m | Reduce neuron energy and synapse weight |
+| Consolidate | 5m | Move mature neurons to deeper layers |
+| Prune | 10m | Archive dead synapses |
+| Persist | 1m | Flush to disk (.nrdb + WAL) |
+| Reorg | 15m | Optimize spatial locality |
+
+## Persistence
+
+Binary `.nrdb` format with CRC32 checksum, optional gzip, msgpack encoding. WAL for crash recovery. fsync policies: `always`, `interval` (default 1s), `off`.
+
+## CLI Client
+
+```bash
+qubicdb-cli write "User prefers TypeScript" --index idx-123 --metadata thread_id=conv-1
+qubicdb-cli search "programming" --index idx-123 --depth 2 --limit 10
+qubicdb-cli recall --index idx-123
+```
+
+## License
+
+MIT — Developed by Deniz Umut Dereli (https://github.com/denizumutdereli)
