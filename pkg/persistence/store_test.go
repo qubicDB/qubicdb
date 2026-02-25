@@ -143,6 +143,70 @@ func TestStoreSaveAsync(t *testing.T) {
 	}
 }
 
+func TestStoreSaveAsyncBlocksOnMatrixWriteLock(t *testing.T) {
+	store, tmpDir := setupTestStore(t)
+	defer os.RemoveAll(tmpDir)
+
+	m := core.NewMatrix("user-1", core.DefaultBounds())
+	m.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- store.SaveAsync(m)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("SaveAsync should wait while matrix write lock is held, got early result: %v", err)
+	case <-time.After(50 * time.Millisecond):
+		// expected: blocked
+	}
+
+	m.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SaveAsync failed after lock release: %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("SaveAsync did not resume after lock release")
+	}
+}
+
+func TestStoreFlushAllBlocksOnMatrixWriteLock(t *testing.T) {
+	store, tmpDir := setupTestStore(t)
+	defer os.RemoveAll(tmpDir)
+
+	m := core.NewMatrix("user-1", core.DefaultBounds())
+	if err := store.SaveAsync(m); err != nil {
+		t.Fatalf("SaveAsync failed: %v", err)
+	}
+
+	m.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- store.FlushAll()
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("FlushAll should wait while matrix write lock is held, got early result: %v", err)
+	case <-time.After(50 * time.Millisecond):
+		// expected: blocked
+	}
+
+	m.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("FlushAll failed after lock release: %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("FlushAll did not resume after lock release")
+	}
+}
+
 func TestStoreListIndexes(t *testing.T) {
 	store, tmpDir := setupTestStore(t)
 	defer os.RemoveAll(tmpDir)

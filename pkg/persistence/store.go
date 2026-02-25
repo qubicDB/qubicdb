@@ -180,7 +180,7 @@ func NewStoreWithDurability(basePath string, compress bool, durability Durabilit
 
 // Save persists a matrix to disk
 func (s *Store) Save(matrix *core.Matrix) error {
-	data, err := s.codec.Encode(matrix)
+	data, err := s.encodeMatrixLocked(matrix)
 	if err != nil {
 		return fmt.Errorf("encode failed: %w", err)
 	}
@@ -198,7 +198,7 @@ func (s *Store) Save(matrix *core.Matrix) error {
 
 // SaveAsync queues a matrix for async persistence.
 func (s *Store) SaveAsync(matrix *core.Matrix) error {
-	data, err := s.codec.Encode(matrix)
+	data, err := s.encodeMatrixLocked(matrix)
 	if err != nil {
 		return fmt.Errorf("encode failed: %w", err)
 	}
@@ -226,7 +226,7 @@ func (s *Store) flushUser(indexID core.IndexID) error {
 	s.writeMu.Unlock()
 
 	// Encode matrix
-	data, err := s.codec.Encode(matrix)
+	data, err := s.encodeMatrixLocked(matrix)
 	if err != nil {
 		return fmt.Errorf("encode failed: %w", err)
 	}
@@ -237,7 +237,9 @@ func (s *Store) flushUser(indexID core.IndexID) error {
 	}
 
 	// Update index
+	matrix.RLock()
 	snapshot := CreateSnapshot(matrix)
+	matrix.RUnlock()
 	s.indexMu.Lock()
 	s.index[indexID] = &snapshot
 	s.totalWrites++
@@ -245,6 +247,12 @@ func (s *Store) flushUser(indexID core.IndexID) error {
 
 	// Save index
 	return s.saveIndex()
+}
+
+func (s *Store) encodeMatrixLocked(matrix *core.Matrix) ([]byte, error) {
+	matrix.RLock()
+	defer matrix.RUnlock()
+	return s.codec.Encode(matrix)
 }
 
 // FlushAll writes all pending matrices
