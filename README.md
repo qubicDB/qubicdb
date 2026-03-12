@@ -29,7 +29,7 @@ docker run -d \
   -v $(pwd)/data:/app/data \
   -e QUBICDB_ADMIN_USER=admin \
   -e QUBICDB_ADMIN_PASSWORD=changeme \
-  qubicdb/qubicdb:1.0.0
+  qubicdb/qubicdb:latest
 ```
 
 Docker Hub: [hub.docker.com/r/qubicdb/qubicdb](https://hub.docker.com/r/qubicdb/qubicdb)
@@ -119,7 +119,7 @@ go run ./cmd/qubicdb --config ./qubicdb.yaml
 Authoritative API docs:
 
 - OpenAPI spec: `./openapi.yaml`
-- Detailed operations/config/mechanics reference: `./docs/API.md`
+- Online documentation: [qubicdb.github.io/docs](https://qubicdb.github.io/docs/)
 
 All index-scoped endpoints require `X-Index-ID` header or `index_id` query parameter.
 
@@ -377,8 +377,6 @@ qubicdb/
 │   └── api/
 │       ├── server.go      # HTTP API server
 │       └── apierr/        # Standardized API errors
-├── adapters/
-│   └── typescript/        # @qubicdb/deepagent-adapter
 ├── qubicdb.example.yaml   # Example YAML config
 ├── Dockerfile
 ├── docker-compose.yml

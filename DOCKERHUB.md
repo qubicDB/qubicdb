@@ -9,7 +9,7 @@ QubicDB is an organic memory engine inspired by biological brain mechanics. Inst
 ## Quick Start
 
 ```bash
-docker pull qubicdb/qubicdb:1.0.1
+docker pull qubicdb/qubicdb:latest
 
 docker run -d \
   --name qubicdb \
@@ -18,7 +18,7 @@ docker run -d \
   -e QUBICDB_ADMIN_ENABLED=true \
   -e QUBICDB_ADMIN_USER=admin \
   -e QUBICDB_ADMIN_PASSWORD=changeme \
-  qubicdb/qubicdb:1.0.1
+  qubicdb/qubicdb:latest
 ```
 
 Server is available at `http://localhost:6060`.
@@ -38,13 +38,13 @@ docker run -d \
   -e QUBICDB_ADMIN_USER=admin \
   -e QUBICDB_ADMIN_PASSWORD=changeme \
   -e QUBICDB_ALLOWED_ORIGINS=http://localhost:8080 \
-  qubicdb/qubicdb:1.0.1
+  qubicdb/qubicdb:latest
 
 docker run -d \
   --name qubicdb-ui \
   --network qubicdb-net \
   -p 8080:80 \
-  qubicdb/qubicdb-ui:1.0.1
+  qubicdb/qubicdb-ui:latest
 ```
 
 Then open `http://localhost:8080` and log in with your admin credentials.
