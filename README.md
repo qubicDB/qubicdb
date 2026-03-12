@@ -38,6 +38,8 @@ IDE integrations and MCP skills: [github.com/qubicDB/skills](https://github.com/
 
 Full Docker, vector, and IDE setup guide: [github.com/qubicDB/skills/blob/main/SETUP.md](https://github.com/qubicDB/skills/blob/main/SETUP.md)
 
+Local vector helper instructions and patch scripts: [github.com/qubicDB/qubicdb/tree/main/patches](https://github.com/qubicDB/qubicdb/tree/main/patches)
+
 ---
 
 ## Features
