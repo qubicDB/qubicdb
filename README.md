@@ -34,6 +34,10 @@ docker run -d \
 
 Docker Hub: [hub.docker.com/r/qubicdb/qubicdb](https://hub.docker.com/r/qubicdb/qubicdb)
 
+IDE integrations and MCP skills: [github.com/qubicDB/skills](https://github.com/qubicDB/skills)
+
+Full Docker, vector, and IDE setup guide: [github.com/qubicDB/skills/blob/main/SETUP.md](https://github.com/qubicDB/skills/blob/main/SETUP.md)
+
 ---
 
 ## Features
