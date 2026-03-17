@@ -25,6 +25,28 @@ Server is available at `http://localhost:6060`.
 
 ---
 
+## Bundled Vector Image
+
+`qubicdb/qubicdb-bundled:latest` is a separate image that includes an example MIT-licensed GGUF embedding model (`MiniLM-L6-v2.Q8_0.gguf`, about 25 MB).
+
+```bash
+docker pull qubicdb/qubicdb-bundled:latest
+
+docker run -d \
+  --name qubicdb-bundled \
+  -p 6060:6060 \
+  -v $(pwd)/data:/app/data \
+  -e QUBICDB_ADMIN_ENABLED=true \
+  -e QUBICDB_ADMIN_USER=admin \
+  -e QUBICDB_ADMIN_PASSWORD=changeme \
+  -e QUBICDB_VECTOR_ENABLED=true \
+  qubicdb/qubicdb-bundled:latest
+```
+
+Use this lane when you want semantic/vector search without mounting a local `dist/` folder.
+
+---
+
 ## With Admin UI
 
 ```bash
@@ -76,6 +98,7 @@ Then open `http://localhost:8080` and log in with your admin credentials.
 | `QUBICDB_ADMIN_PASSWORD` | — | Admin password (required if enabled) |
 | `QUBICDB_ALLOWED_ORIGINS` | `*` | CORS allowed origins (comma-separated) |
 | `QUBICDB_MCP_ENABLED` | `false` | Enable MCP endpoint |
+| `QUBICDB_VECTOR_ENABLED` | `false` | Enable vector search |
 
 ---
 
@@ -118,6 +141,7 @@ Full API reference: [qubicdb.github.io/docs](https://qubicdb.github.io/docs/)
 - **Source:** [github.com/qubicDB/qubicdb](https://github.com/qubicDB/qubicdb)
 - **API Docs:** [qubicdb.github.io/docs](https://qubicdb.github.io/docs/)
 - **Admin UI:** [hub.docker.com/r/qubicdb/qubicdb-ui](https://hub.docker.com/r/qubicdb/qubicdb-ui)
+- **Bundled Vector Image:** [hub.docker.com/r/qubicdb/qubicdb-bundled](https://hub.docker.com/r/qubicdb/qubicdb-bundled)
 
 ---
 

@@ -32,7 +32,11 @@ docker run -d \
   qubicdb/qubicdb:latest
 ```
 
+Bundled vector image: `qubicdb/qubicdb-bundled:latest` includes an example MIT-licensed GGUF embedding model (`MiniLM-L6-v2.Q8_0.gguf`, about 25 MB) for out-of-the-box semantic search.
+
 Docker Hub: [hub.docker.com/r/qubicdb/qubicdb](https://hub.docker.com/r/qubicdb/qubicdb)
+
+Bundled vector image: [hub.docker.com/r/qubicdb/qubicdb-bundled](https://hub.docker.com/r/qubicdb/qubicdb-bundled)
 
 IDE integrations and MCP skills: [github.com/qubicDB/skills](https://github.com/qubicDB/skills)
 
