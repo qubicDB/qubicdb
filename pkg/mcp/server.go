@@ -22,6 +22,12 @@ const (
 	toolRecall             = "qubicdb_recall"
 	toolContext            = "qubicdb_context"
 	toolRegistryFindCreate = "qubicdb_registry_find_or_create"
+
+	// Cross-index / Global tools
+	toolListIndexes   = "qubicdb_list_indexes"
+	toolGlobalSearch  = "qubicdb_global_search"
+	toolMultiSearch   = "qubicdb_multi_search"
+	toolRecentIndexes = "qubicdb_recent_indexes"
 )
 
 // Config controls MCP route behavior.
@@ -42,6 +48,12 @@ type Backend interface {
 	Recall(ctx context.Context, indexID string, limit int) (map[string]any, error)
 	Context(ctx context.Context, indexID, cue string, depth, maxTokens int) (map[string]any, error)
 	RegistryFindOrCreate(ctx context.Context, uuid string, metadata map[string]any) (map[string]any, error)
+
+	// Cross-index / Global operations
+	ListIndexes(ctx context.Context, activeOnly bool, limit int) (map[string]any, error)
+	GlobalSearch(ctx context.Context, query string, depth, limit int, metadata map[string]string) (map[string]any, error)
+	MultiSearch(ctx context.Context, indexIDs []string, query string, depth, limit int, metadata map[string]string) (map[string]any, error)
+	RecentIndexes(ctx context.Context, limit int, minNeurons int) (map[string]any, error)
 }
 
 // NewHandler builds an MCP streamable HTTP handler with optional API-key auth
@@ -235,6 +247,109 @@ func registerTools(s *mcpserver.MCPServer, backend Backend, allowed []string) {
 				return errResult(err.Error()), nil
 			}
 			return structuredResult("registry entry resolved", result)
+		})
+	}
+
+	// ── Cross-index / Global tools ──────────────────────────────────────────
+
+	if isAllowed(toolListIndexes) {
+		s.AddTool(mcpproto.NewTool(toolListIndexes,
+			mcpproto.WithDescription("List all registered indexes with their metadata and stats. Use active_only=true to filter to currently loaded indexes."),
+			mcpproto.WithBoolean("active_only", mcpproto.Description("If true, only return currently active/loaded indexes (default: false, returns all registered).")),
+			mcpproto.WithNumber("limit", mcpproto.Description("Maximum number of indexes to return (default: 100).")),
+		), func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			args := req.GetArguments()
+			activeOnly := getBool(args, "active_only", false)
+			limit := getInt(args, "limit", 100)
+			result, err := backend.ListIndexes(ctx, activeOnly, limit)
+			if err != nil {
+				return errResult(err.Error()), nil
+			}
+			return structuredResult("indexes listed", result)
+		})
+	}
+
+	if isAllowed(toolGlobalSearch) {
+		s.AddTool(mcpproto.NewTool(toolGlobalSearch,
+			mcpproto.WithDescription("Search across ALL active indexes using semantic/vector similarity. Returns results grouped by index with cross-index relevance ranking."),
+			mcpproto.WithString("query", mcpproto.Required(), mcpproto.Description("Search query for semantic matching across all indexes.")),
+			mcpproto.WithNumber("depth", mcpproto.Description("Search depth for spreading activation (default: 2).")),
+			mcpproto.WithNumber("limit", mcpproto.Description("Max results per index (default: 10).")),
+			mcpproto.WithString("metadata", mcpproto.Description("Optional JSON metadata filter (e.g. {\"type\":\"decision\"}).")),
+		), func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			args := req.GetArguments()
+			query := getString(args, "query", "")
+			if strings.TrimSpace(query) == "" {
+				return errResult("query is required"), nil
+			}
+			depth := getInt(args, "depth", 2)
+			limit := getInt(args, "limit", 10)
+			var metadata map[string]string
+			if raw := getString(args, "metadata", ""); raw != "" {
+				if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+					return errResult("metadata must be a valid JSON object"), nil
+				}
+			}
+			result, err := backend.GlobalSearch(ctx, query, depth, limit, metadata)
+			if err != nil {
+				return errResult(err.Error()), nil
+			}
+			return structuredResult("global search completed", result)
+		})
+	}
+
+	if isAllowed(toolMultiSearch) {
+		s.AddTool(mcpproto.NewTool(toolMultiSearch,
+			mcpproto.WithDescription("Search across a specific list of indexes. Useful when you know which indexes to query."),
+			mcpproto.WithString("index_ids", mcpproto.Required(), mcpproto.Description("JSON array of index IDs to search (e.g. [\"brain-repo1\",\"brain-repo2\"]).")),
+			mcpproto.WithString("query", mcpproto.Required(), mcpproto.Description("Search query.")),
+			mcpproto.WithNumber("depth", mcpproto.Description("Search depth (default: 2).")),
+			mcpproto.WithNumber("limit", mcpproto.Description("Max results per index (default: 10).")),
+			mcpproto.WithString("metadata", mcpproto.Description("Optional JSON metadata filter.")),
+		), func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			args := req.GetArguments()
+			indexIDsRaw := getString(args, "index_ids", "")
+			query := getString(args, "query", "")
+			if indexIDsRaw == "" || strings.TrimSpace(query) == "" {
+				return errResult("index_ids and query are required"), nil
+			}
+			var indexIDs []string
+			if err := json.Unmarshal([]byte(indexIDsRaw), &indexIDs); err != nil {
+				return errResult("index_ids must be a valid JSON array of strings"), nil
+			}
+			if len(indexIDs) == 0 {
+				return errResult("index_ids array cannot be empty"), nil
+			}
+			depth := getInt(args, "depth", 2)
+			limit := getInt(args, "limit", 10)
+			var metadata map[string]string
+			if raw := getString(args, "metadata", ""); raw != "" {
+				if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+					return errResult("metadata must be a valid JSON object"), nil
+				}
+			}
+			result, err := backend.MultiSearch(ctx, indexIDs, query, depth, limit, metadata)
+			if err != nil {
+				return errResult(err.Error()), nil
+			}
+			return structuredResult("multi-index search completed", result)
+		})
+	}
+
+	if isAllowed(toolRecentIndexes) {
+		s.AddTool(mcpproto.NewTool(toolRecentIndexes,
+			mcpproto.WithDescription("Get the most recently active indexes sorted by last operation time. Useful for discovering which brains have recent activity."),
+			mcpproto.WithNumber("limit", mcpproto.Description("Maximum number of indexes to return (default: 20).")),
+			mcpproto.WithNumber("min_neurons", mcpproto.Description("Only include indexes with at least this many neurons (default: 0).")),
+		), func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			args := req.GetArguments()
+			limit := getInt(args, "limit", 20)
+			minNeurons := getInt(args, "min_neurons", 0)
+			result, err := backend.RecentIndexes(ctx, limit, minNeurons)
+			if err != nil {
+				return errResult(err.Error()), nil
+			}
+			return structuredResult("recent indexes retrieved", result)
 		})
 	}
 }

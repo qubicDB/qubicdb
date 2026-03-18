@@ -128,7 +128,29 @@ Born at energy=1.0. Fired: +0.3. Decay reduces over time. Never deleted — beco
 
 Enable: `mcp.enabled: true` in config. Mounts at `/mcp` (streamable HTTP).
 
-Tools: `qubicdb_write`, `qubicdb_read`, `qubicdb_search`, `qubicdb_recall`, `qubicdb_context`, `qubicdb_registry_find_or_create`
+### Single-Index Tools
+| Tool | Description |
+|------|-------------|
+| `qubicdb_write` | Write a memory to a specific index |
+| `qubicdb_read` | Read a neuron by ID from a specific index |
+| `qubicdb_search` | Semantic search within a single index |
+| `qubicdb_recall` | List recent memories from a single index |
+| `qubicdb_context` | Assemble RAG context from a single index |
+| `qubicdb_registry_find_or_create` | Register or find a UUID |
+
+### Cross-Index / Global Tools
+| Tool | Description |
+|------|-------------|
+| `qubicdb_list_indexes` | List all registered indexes with stats. Use `active_only=true` for loaded indexes only |
+| `qubicdb_global_search` | Search across ALL active indexes with semantic/vector similarity |
+| `qubicdb_multi_search` | Search across a specific list of indexes (e.g. `["brain-repo1","brain-repo2"]`) |
+| `qubicdb_recent_indexes` | Get most recently active indexes sorted by last operation time |
+
+**Cross-index workflow example:**
+1. `qubicdb_list_indexes` → discover available brains
+2. `qubicdb_recent_indexes` → find most active ones
+3. `qubicdb_global_search` → search across all for relationships
+4. `qubicdb_multi_search` → targeted search on specific indexes
 
 Auth: `X-API-Key` header or `Authorization: Bearer <key>` (set via `mcp.apiKey`).
 
